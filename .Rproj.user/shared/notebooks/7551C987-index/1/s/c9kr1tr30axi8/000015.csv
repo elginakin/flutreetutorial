@@ -1,0 +1,3 @@
+"0","tree_ann_p <- ggtree(tree_ann, mrsd = '2023-04-10', right = TRUE) # the tree_ann_p will serve as our ""base tree"" we can add aesthetic elements onto it later to shave down verbose code. "
+"0",""
+"0","tree_ann_p + theme_tree2() # theme_tree2 will give us our time-scaled axis."

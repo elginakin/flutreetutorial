@@ -1,0 +1,504 @@
+---
+title: Constructing time-resolved phylogenetic trees, A tutorial
+description: | 
+    A basic tutorial for building and visualizing time-resolved phylogenetic trees 
+Catagories:
+    - tutorial
+author: Elgin Akin
+date: "06/09/2024"
+format: 
+  html:
+    highlight-style: pygments
+    code-overflow: wrap
+    code-line-numbers: true
+    code-tools:
+      source: true
+      toggle: false
+image: 'results/plots/h3_tree.png'
+---
+
+> If you would prefer to follow along with the tutorial data and scripts, a clone of this notebook, data and all supporting information is available [here](https://github.com/elginakin/flutreetutorial). You can make a copy using `git` but navigating to your desired folder and executing: `git clone https://github.com/elginakin/flutreetutorial`.
+
+# Introduction 
+
+Phylogenetic trees are a powerful tool to assess evolutionary relationships between organisms.
+While this tutorial does not cover the basic principles of viral evolution and ecology, it does provide a quick start guide to constructing, visualizing and annotating static phylogenetic trees using established tools developed and utilized by viral surveillance teams. 
+
+If you have already constructed your time tree in either [BEAST](https://www.beast2.org/), [IQ-Tree](http://www.iqtree.org/doc/Dating), or [TreeTime](https://treetime.readthedocs.io/en/latest/), you can skip straight to the [time tree visualization](#visualizing-our-tree) section  
+
+::: {.callout-warning}
+This tutorial covers the basics of constructing and visualizing time-resolved phylogenetic trees using the H3N2 Influenza A virus as an example. This tutorial is intended for users with a basic understanding of the UNIX command line and R.
+:::
+
+:::{.row-page=1}
+![H3N2 Tree](results/plots/h3_tree.png)
+
+![Clade Frequency](results/plots/h3_frequency.png)
+:::
+
+
+# 1. Setting up your environment and directories
+
+::: {.callout-warning}
+This tutorial assumes you are operating on a machine with a UNIX-based terminal accessible (i.e. macOS, linux or WSL) some of the tools we use are not easily accessible on Windows machines.
+:::
+
+## Tree Construction 
+
+## Tree Visualization (R)
+
+1. We will use the following packages for tree visualization in R. Be sure to install them if you have not already.
+    - [ggtree](https://guangchuangyu.github.io/software/ggtree/)
+    - [treeio](https://bioconductor.org/packages/release/bioc/html/treeio.html)
+    - [ape](https://cran.r-project.org/web/packages/ape/index.html)
+    - [tidyverse](https://www.tidyverse.org/)
+
+```{r}
+#| echo: false
+#| eval: false
+# install if you need them: 
+
+install.packages("tidyverse")   
+install.packages("ggtree")
+install.packages("treeio")
+nstall.packages("ape")
+install.packages("colorspace")
+```
+
+Full tutorials for more comprehensive phylognetic analysis pipelines with interactives are descrived in great detail with pathogen-specific tutorials by the [Nextstrain Team](https://nextstrain.org/team).
+  - [Introduction to Nextstrain](https://docs.nextstrain.org/en/latest/index.html)
+  - [Creating a phylogenetic workflow](https://docs.nextstrain.org/en/latest/tutorials/creating-a-phylogenetic-workflow.html)
+
+## Directories
+
+we already have our data directory, go ahead and make 2 directory for our results and config in your home directory. 
+```{bash}
+#| eval: false
+mkdir results results/plots config config/nextclade config/nextclade/flu_h3n2_ha
+
+```
+
+
+# 2. Accessing and exploring our data from NCBI
+
+For simplicity in this tutorial, we will be accessing sequencing data deposited on NCBI by various groups. At the time of publishing this tutorial, the sequences were accessed from the [NCBI Virus Database](https://www.ncbi.nlm.nih.gov/genomes/FLU/Database/nph-select.cgi?go=database). In fall of 2024 NCBI will likely redirect the Influenza Virus Resources to [NCBI Virus](https://www.ncbi.nlm.nih.gov/labs/virus/vssi/#/virus?SeqType_s=Nucleotide&VirusLineage_ss=taxid:197911&VirusLineage_ss=taxid:197912&VirusLineage_ss=taxid:197913&VirusLineage_ss=taxid:1511083) so this step will likely need to be updated for clarity in the near future.
+
+Because these sequences are truly open source they are available in this tutorial and can be downloaded directly from this page: 
+
+::: {.callout-note}
+If you did not clone the tutorial repository, right click the button below to download the data.
+
+<a href="https://raw.githubusercontent.com/elginakin/elginakin.github.io/main/posts/content/flutree_tutorial/data/Influenza_virus_database.fa" download>
+  <button style="padding: 10px 15px; background-color: #007bff; color: white; border: none; border-radius: 5px; cursor: pointer;">
+    Right Click and "Save As"
+  </button>
+</a>
+:::
+
+This data set include human H3N2 sequences uploaded to NCBI between 2020 and 2024. 
+
+::: {.callout-note}
+We changed the default fasta header template to the following definition for smooth analysis in augur: 
+
+>{accession}|{strain}|{year}-{month}-{day}|{country}|{segment}
+
+:::
+
+Lets take a quick peek at some information about our fasta. We already know from NCBI that there should be **10191** sequences available to us but lets just check. An incredibly powerful linux tool we can use is `grep` which you can learn more about [here](https://bioinformaticsworkbook.org/Appendix/Unix/unix-basics-3grep.html#gsc.tab=0)
+
+```{bash}
+#| eval: true
+grep -c  "^>" data/Influenza_virus_database.fa 
+```
+
+`10191` Great looks like we have all 10191 sequences. 
+
+Next, lets take a peek at our fasta headers. These headers are dennoted as information about our sequence precceed by a ">" and followed by a second line containing our sequencing data. Fasta headers can (theoretically) contain as much information as one pleases as long as it containing in the same line. In common databases such as [NCBI Virus](https://www.ncbi.nlm.nih.gov/labs/virus/vssi/#/), [GISAID](https://gisaid.org/), the [BV-BRC](https://www.bv-brc.org/), etc, a lot of information can be included in these headers. Why would one want to do this? Convenience is once answer as metadata complementing sequences can be 1:1 since we do not have to worry about joining these sequences with external metadata (covered at the end of this tutorial). 
+
+(If you downloaded data youself, you have likely specified what is included in the header but lets look anyway). By default, NCBI deliminates header information using spaces which is a problem when parsing. 
+
+```{bash}
+#| eval: false
+head -10 posts/content/flutree_tutorial/data/Influenza_virus_database.fasta
+```
+
+>MT056202|A/California/01/2020|2020-01-02|USA|4
+>GGATAATTCTATTAACCATGAAGACTATCATTGCTTTGAGCTGCATTCTATGTCTGGTTTTCGCTCAAAA
+>AATTCCTGGAAATGACAATAGCACGGCAACGCTGTGCCTTGGGCACCATGCAGTACCAAACGGAACGATA
+>GTGAAAACAATCACGAATGACCGAATTGAAGTTACTAATGCTACTGAGCTGGTTCAGAACTCCTCAATAG
+>GTGAAATATGCGACAGTCCTCATCAGATCCTTGATGGAGAAAACTGCACACTAATAGATGCTCTATTGGG
+>AGACCCTCAGTGTGATGGCTTTCAAAATAAGAAATGGGACCTTTTCGTTGAACGGAACAAAGCCTACAGC
+>AACTGTTACCCTTATGATGTGCCGGATTATGCATCCCTTAGATCACTAGTTGCCTCATCCGGCACACTGG
+>AGTTTAACAATGAAAGCTTCAATTGGGCTGGAGTCACTCAAAACGGAACAAGTTCTTCTTGCACAAGGGG
+>ATCTAAAAGTAGTTTCTTTAGTAGATTAAATTGGTTGACCCACTTAAACTCCAAATACCCAGCATTAAAC
+>GTGACTATGCCAAACAATGAACAATTTGACAAATTGTACATTTGGGGTGTTCACCACCCGGGTACGGACA`
+
+These sequences have information for 5 attributes (from left to right) seperated by a `|`. 
+* Accession
+* Strain Name
+* Collection Date
+* Country
+* Segment 
+
+# Generating Metadata from fasta headers.
+
+Let generate a metadata table using the information in the `.fasta` headers using ['augur parse'](https://docs.nextstrain.org/projects/augur/en/stable/usage/cli/parse.html). 
+
+Download and test augur parse if you gave not already. Augur parse REQUIRES that one attribute in your metadata is named "strain". Let rename our accession number as "strain" as defined in the fields flag. This will take a second to run since we have so many sequences. We will downsample later in this tutorial. 
+
+```{bash}
+#| eval: false
+augur parse \
+    --sequences data/Influenza_virus_database.fa \
+    --output-sequences results/sequences.fasta \
+    --output-metadata results/metadata.tsv \
+    --prettify-fields date \
+    --fields strain strain_name date country segment
+```
+
+We now have 2 new files, a fasta containing a reduced name representing the strain denotation from augur parse as well as metadata file containing the fields we specified. 
+
+It is not uncommon for sequences to uploaded with incomplete date date. In this case, we have 21 sequences which have year-month but not day. Luckily, the nextstrain team is on top of this prviding us with an augur subcommand called [curate](https://docs.nextstrain.org/projects/augur/en/stable/usage/cli/curate/index.html) which we can use to [format dates](https://docs.nextstrain.org/projects/augur/en/stable/usage/cli/curate/format-dates.html) to make them compliant with ISO 8601 dates (YYYY-MM-DD) where missing data are represented with "XX" (e.g. `2021-07-` will be converted to `2021-07-XX` )
+
+
+## Curate meatadata file dates
+
+```{bash}
+#| eval: false
+
+augur curate format-dates \
+    --metadata results/metadata.tsv \
+    --date-fields date \
+    --expected-date-formats "%Y-%m-%d" "%Y-%m-" \
+    --output-metadata results/dates_metadata.tsv
+```
+
+Great! Our dates are now in a proper format for time-resolved tree construction. 
+If we manually inspect our results `dates_metadata.tsv` file, we can see that missing days have been replaced with the `XX` ambiguity for the day.
+
+|strain|strain_name|date|country|segment|
+|---|---|---|---|---|
+|OQ180101|A/WA/39360/2022|**2022-11-XX**|USA|4|
+|OQ180141|A/WA/08914/2022|**2022-12-XX**|USA|4|
+|OQ180149|A/WA/18843/2022|**2022-11-XX**|USA|4|
+|OQ180165|A/WA/27812/2022|**2022-12-XX**|USA|4|
+|OQ180173|A/WA/31872/2022|**2022-12-XX**|USA|4|
+|OQ180181|A/WA/34476/2022|**2022-12-XX**|USA|4|
+|OQ180189|A/WA/38451/2022|**2022-11-XX**|USA|4|
+|OQ180197|A/WA/44633/2022|**2022-11-XX**|USA|4|
+|OQ180205|A/WA/49566/2022|**2022-11-XX**|USA|4|
+|OQ180213|A/WA/49996/2022|**2022-11-XX**|USA|4|
+|OQ180221|A/WA/52234/2022|**2022-12-XX**|USA|4|
+|OQ180229|A/WA/54319/2022|**2022-11-XX**|USA|4|
+|OQ180245|A/WA/57577/2022|**2022-12-XX**|USA|4|
+|OQ180253|A/WA/66184/2022|**2022-12-XX**|USA|4|
+|OQ180261|A/WA/69597/2022|**2022-12-XX**|USA|4|
+|OQ180269|A/WA/75885/2022|**2022-12-XX**|USA|4|
+
+:::{.callout-important}
+If you wish to proceed to constructing phylogenetic trees with amino acid mutations mapped to specific notes, stop here and proceed with the [Creating a phylogenetic workflow](https://docs.nextstrain.org/en/latest/tutorials/creating-a-phylogenetic-workflow.html) tutorial. The following steps only provide mutation mapping at the nucleotide level in a time resolved tree.
+:::
+
+# 3. Sequence alignment, feature annotation and clade assignment
+
+This tutorial uses [nextclade 3.3.0](https://docs.nextstrain.org/projects/nextclade/en/stable/changes/CHANGELOG.html#nextclade-3-3-0). Nextclade requires an H3N2 input dataset. We can download a maintained dataset natively through nextclade cli.
+
+```{bash}
+#| eval: false
+nextclade dataset get \
+  -n flu_h3n2_ha \
+  -o config/nextclade/flu_h3n2_ha
+```
+
+
+```{bash}
+#| eval: false
+
+nextclade run \
+    --input-dataset=config/nextclade/flu_h3n2_ha/ \
+    --output-all=results/ \
+    results/sequences.fasta
+```
+
+## Join metadata and nextclade results
+
+```{r}
+library(tidyverse)
+
+metadata = read_tsv('./results/dates_metadata.tsv')
+nextclade = read_tsv('./results/nextclade.tsv')
+
+metadata_join = metadata %>% 
+    left_join(nextclade, by = c('strain' = 'seqName'))
+```
+
+Lets check to see what metadata we have availible and select accordingly. 
+
+```{r}
+colnames(metadata_join) 
+```
+
+Lets select only columns that we would like to include in our tree. 
+
+* Strain_name
+* Date
+* Country
+* Clade
+* Subclade
+* Short-clade 
+* glycosylation
+* RBD
+
+```{r}
+metadata_join_filter = metadata_join %>% 
+  select(strain,
+    strain_name, 
+    date, 
+    country, 
+    clade, 
+    subclade, 
+    `short-clade`,
+    glycosylation, 
+    RBD) %>% 
+    # write out the metadata final metadata  file
+  write_tsv('results/nextclade_metadata.tsv') 
+```
+
+## Final downsampling
+
+The file we have downloaded contains too many sequences to be visualized on a single tree. We will downsample to 150 sequences for this tutorial. We can use augur filter to downsample according to attributes such as time of collection sampling to a maximum of 150 sequences. 
+
+
+```{bash}
+#| eval: false
+augur filter \
+    --sequences results/sequences.fasta \
+    --metadata results/nextclade_metadata.tsv \
+    --group-by year month \
+    --subsample-max-sequences 150 \
+    --output results/downsampled_sequences.fasta \
+    --output-metadata results/downsampled_nextclade_metadata.tsv
+```
+
+
+# 4. Generating a time tree
+
+We have generated quite a few files at the point in order to filter down our samples.
+
+## Realign downsampled sequences
+
+```{bash}
+#| eval: false
+mafft --auto --thread 8 results/downsampled_sequences.fasta > results/downsampled_sequences.aln
+```
+
+```{bash}
+#| eval: false
+treetime \
+    --dates results/downsampled_nextclade_metadata.tsv \
+    --aln results/downsampled_sequences.aln \
+    --outdir results/treetime
+```
+
+# 5. Visualizing our tree {#visualizing-our-tree}
+
+We will be using [ggtree](https://guangchuangyu.github.io/software/ggtree/) [treeio]() packages developed by [Guangchuang Yu](https://github.com/GuangchuangYu).Please be sure it include appropriate citations as requested [here](https://github.com/YuLab-SMU/ggtree).
+
+This tutorial will be using tidyverse packages along with treeio, ggtree and ape
+
+There are many ways to add information to newick and nexus formatted trees. For simplicity, we will be converting our tree into a dataframe for easy data joining before converting back into a tree object.
+
+Required packages
+```{r}
+#| warning: false
+library(tidyverse)
+library(treeio)
+library(ggtree)
+library(ape)
+```
+
+## Import time tree 
+
+```{r}
+#| warning: false
+metadata = read_tsv('results/downsampled_nextclade_metadata.tsv')
+tree = read.beast('results/treetime/timetree.nexus')
+
+# Convert tree into a dataframe for human readable data joining. 
+tree_df = tree %>% as_data_frame() #use treeio
+
+# join the curated metadata with the tree data
+tree_df = left_join(tree_df, metadata, by=c("label"="strain"))
+
+# convert dataframe back into phylo data type.
+tree_ann = tree_df %>% as.treedata() 
+
+tree_ann
+```
+## Determine mrsd
+
+Since we have gnerated a tree where the branch lengths are now time resolved, we need to calibrate the date by a reference time for [proper scaling](https://yulab-smu.top/treedata-book/chapter4.html#rescale-tree) by ggtree. The `read beast` can accept a *m*ost *r*ecent *s*ampling *d*ate (or mrsd) for this calibration. Let's grab the range of the sequence dates from the metadata file. 
+
+```{r}
+metadata %>% 
+    summarize(min = min(date), max = max(date))
+```
+
+The mrsd for these data is **2023-04-10.** lets proceed with simply plotting the tree along with the time axis. 
+
+## Ploting a simple tree
+
+Lets take a look at the tree by plotting the minimal tree structure and time scale using theme_tree2(). If all previous steps were completed successfully, we will have a tree along with a time-scaled axis.
+
+```{r}
+# the tree_ann_p will serve as our "base tree" we can add aesthetic elements onto it later to shave down verbose code. 
+tree_ann_p <- ggtree(tree_ann,
+                      mrsd = '2023-04-10', 
+                      right = TRUE) # this "ladderizes" our nodes to be in descending order.
+
+tree_ann_p + theme_tree2() # theme_tree2 will give us our time-scaled axis.
+```
+
+Annotating your tree is the trickiest part of this step. Static trees require the analyst to provide concise information in a way that is simple to interpret. The beauty of ggtree and its spporting packages is that  syntax is simple and intuitive making it easy to add information to your tree. Futhermore, its documentation is incrediblely detailed with abundance reproducible examples and explanations for nearly any attribute you would like to add.
+
+Below, I show just one example which best fits only 2 dimensions of information here using tip color and size. However, aesthetics for tip shape as well as for branches can be added as well. It is important that we remember that the tree we have constructed is a down sampled version of our original dataset. Thus, I have included a basic example of a streamgraph from the entire dataset of over 10,000 sequences since we are able to better summarize these data with this visualization.
+
+## Plotting an annotated tree
+
+Since H3N2 clade nomenclature is so expansive, lets create a color pallet which can accompany our 23 clades within our dataset. There are dozens of packages which accomplish this beutifully. For this instance, we'll use the [colorspace](https://colorspace.r-forge.r-project.org/reference/hcl_palettes.html) package and specify the "Set3" palette to expand to our clades. 23 is a very high number to represent in a single plot. However, each clade should cluster discretely assisting with visualization. We will be using the `short-clade` column for this plot to condense the verbose nomenclature. 
+
+## Define Color Palette
+```{r}
+library(colorspace)
+palette = qualitative_hcl(23, palette = "Dark2")
+palette
+```
+
+
+```{r}
+# Load required libraries
+library(ggplot2)
+library(ggtree)
+library(grid)
+
+# Define the base plot
+tree_ann_p1 <- tree_ann_p + 
+  geom_tippoint(aes(fill = factor(`short-clade`), # assigning fill instead of color allows a border
+                    size = RBD), # reflect RBD mutations called by nextclade
+                alpha = 0.9, # transparency of points
+                shape = 21, # empty circle
+                stroke = 0.5) + # point border thickness
+  scale_size(range = c(0.5, 2)) + 
+  xlab("Time") +
+  guides(
+    fill = guide_legend(title = "Clade", ncol = 2), # customize our legend
+    size = guide_legend(title = "RBD Mutations")
+  ) +
+  theme_tree2( # justify legend 
+    legend.position = c(0.40, 0.45),
+    axis.text.x = element_text(size = 10), 
+    legend.text = element_text(size = 10), 
+    legend.spacing.x = unit(0.01, "cm"),
+    legend.key.height = unit(0.3, "cm"),
+    legend.background = element_rect(fill = "transparent"),
+    legend.key = element_rect(fill = "transparent", colour = "transparent") # Make legend key backgrounds transparent
+  ) +
+  scale_x_continuous( # define x axis labels and breaks
+    breaks = seq(2009, 2023, by = 2), 
+    labels = seq(2009, 2023, by = 2)
+  ) + # define the date increment shown
+  scale_fill_manual(values = palette) # Set to our palette for points
+
+# Adding alternating grey and white background for each year
+for (year in seq(2008, 2023, by = 1)) {
+  tree_ann_p1 <- tree_ann_p1 +
+    annotation_custom(
+      grob = rectGrob(gp = gpar(fill = ifelse(year %% 2 == 0, 
+                                                "grey80", 
+                                                "white"), 
+                                                col = NA, 
+                                                alpha = 0.3)),
+      xmin = year, xmax = year + 1, ymin = -Inf, ymax = Inf
+    )
+}
+
+tree_ann_p1
+
+```
+
+Lets save our plots and adjust the resolution and size for a "publication-like" figure.
+```{r}
+#! echo: false
+ggsave('results/plots/h3_tree.png', 
+  tree_ann_p1, 
+  height = 5, 
+  width = 4, 
+  dpi = 300)
+```
+
+## Plotting Clade Frequency Over Time
+
+Since we have an abundance of metadata for all 10,000 H3N2 isolates, let's take advantage and plot a [streamgraph] to fully capture the abundance of H3N2 clades over time. We will use the `metadata_join` dataframe we generated containing nextclade-assigned clades. Again, we face the issue of attempting to visualize 23 clades on one plot. However, the fact that only one or two clades are dominating at any given time will assist with the  constraints of many categorical variables. Since we do not have the luxury of discrete clustering as we did with the tree, we can add lines to separate the clades.
+
+
+```{r}
+knitr::kable(metadata_join %>% 
+  select(strain, date, `short-clade`) %>% head(15))
+```
+
+# 6. Example of a stacked area plot with our abbreviated clade names
+
+```{r}
+library(tidyverse)
+library(tidyr)
+
+# Make sure to replace "metadata_join" with the actual name of your dataframe
+metadata_join$date = as.Date(metadata_join$date)
+
+clade_count = metadata_join %>% 
+  mutate(month = format(date, "%Y-%m")) %>% 
+  count(month, `short-clade`) %>% 
+  spread(`short-clade`, n, fill = 0)
+
+clade_count_long <- pivot_longer(clade_count, cols = -month, names_to = "short-clade", values_to = "count")
+
+max_dates <- clade_count_long %>%
+  group_by(`short-clade`) %>%
+  summarize(max_date = max(as.Date(paste0(month, "-01"))))
+
+clade_freq_p <- ggplot(clade_count_long, aes(x = as.Date(paste0(month, "-01")), y = count, fill = `short-clade`)) +
+  geom_area(position='stack', linetype=1, size=0.3, color='black') +
+  geom_vline(data = data.frame(year = 2015:2023), 
+             aes(xintercept = as.Date(paste0(year, "-01-01"))), 
+             color = "grey", 
+             linetype = "dotted", 
+             size = 0.5) +
+  labs(x = "Year", y = "Total Sequences \n uploaded to GISAID") +
+  theme_bw() + 
+  theme(
+    legend.position = c(0.30, 0.6),
+    axis.text.x = element_text(size = 15), 
+    legend.text = element_text(size = 9), 
+    legend.spacing.x = unit(0.01, "cm"),
+    legend.key.height = unit(0.3, "cm"),
+    legend.background = element_rect(fill = "transparent"),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.background = element_rect(fill = "white"),
+    panel.border = element_blank(),
+    guides(color = guide_legend(title = "Clade", ncol = 2))
+  ) +
+  scale_x_date(date_breaks = "1 year", date_labels = "%Y") +
+  scale_fill_manual(values = palette)  # Set our pre-defined color palette
+  
+clade_freq_p
+```
+
+```{r}
+ggsave('results/plots/h3_frequency.png', clade_freq_p, height = 3, width = 6, dpi = 300)
+```
+
+```{r}
+sessionInfo()
+```
+
